@@ -1,6 +1,7 @@
 # 🧠 BitNet: Transformer Variant from Scratch (Custom Implementation)
 
-This repository contains a **from-scratch implementation of BitNet**, a transformer variant known for its efficient architecture using binary-weighted matrices, significantly reducing computational overhead while maintaining performance.
+This repository contains a **from-scratch implementation of BitNet**, a transformer variant known for its efficient architecture using binary-weighted matrices, significantly reducing computational overhead while maintaining performance. 
+### NOTE: This repo is still in working phase.
 
 ## 📓 Notebook: `bitnet_custom.ipynb`
 
