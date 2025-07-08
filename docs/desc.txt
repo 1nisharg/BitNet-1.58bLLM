@@ -1,0 +1,182 @@
+# BitNet b1.58 Architecture Description
+
+## Overview
+This implementation represents a simplified but faithful version of BitNet b1.58, a 1-bit Large Language Model that quantizes weights to ternary values {-1, 0, +1} while maintaining competitive performance with significantly reduced memory and computational requirements.
+
+## Core Architecture Components
+
+### 1. BitLinear Layer (`BitLinear`)
+The fundamental building block that replaces standard linear layers with quantized equivalents.
+
+**Key Features:**
+- **Weight Quantization**: Converts full-precision weights to ternary values {-1, 0, +1}
+- **Input Features**: `in_features` (input neurons)
+- **Output Features**: `out_features` (output neurons)
+- **Parameters**:
+  - `weight`: Full-precision weight parameter (initialized with randn * 0.1)
+  - `weight_scale`: Learnable scaling factor for output
+
+**Quantization Process:**
+```
+1. Calculate scale = mean(|weights|), clamped to minimum 1e-5
+2. Normalize weights: w_norm = weights / scale
+3. Apply threshold quantization: sign(w_norm) * (|w_norm| > 0.5)
+4. Result: weights ∈ {-1, 0, +1}
+```
+
+**Forward Pass:**
+1. Quantize weights on-the-fly using the quantization process
+2. Clamp input activations to [-1, 1] range
+3. Perform linear transformation: `F.linear(x_quant, w_quant)`
+4. Apply learned weight scale to output
+
+### 2. SimpleBitAttention (`SimpleBitAttention`)
+Multi-head attention mechanism adapted for BitNet with efficiency optimizations.
+
+**Architecture:**
+- **Dimension**: `dim` (embedding dimension)
+- **Heads**: Number of attention heads (default: 4)
+- **Head Dimension**: `dim // heads`
+- **Scale Factor**: `head_dim^(-0.5)` for attention scaling
+
+**Components:**
+- `qkv`: Single BitLinear layer producing Query, Key, Value (dim → dim * 3)
+- `proj`: Output projection BitLinear layer (dim → dim)
+
+**Attention Mechanism:**
+1. **QKV Generation**: Single linear transformation creates Q, K, V simultaneously
+2. **Reshape**: `(B, L, 3, heads, head_dim)` → `(3, B, heads, L, head_dim)`
+3. **Attention Computation**: 
+   - `attn = (Q @ K^T) * scale`
+   - Apply causal mask using `torch.tril`
+   - Softmax normalization
+4. **Output**: `(attn @ V)` → reshape → project
+
+### 3. BitMLP (`BitMLP`)
+Feed-forward network component using BitLinear layers.
+
+**Architecture:**
+- **Hidden Dimension**: `dim * 2` (2x expansion ratio)
+- **Layers**: 
+  - `fc1`: BitLinear(dim → hidden_dim)
+  - `fc2`: BitLinear(hidden_dim → dim)
+- **Activation**: GELU activation function
+
+**Forward Pass:** `fc2(GELU(fc1(x)))`
+
+### 4. BitBlock (`BitBlock`)
+Transformer block combining attention and MLP with residual connections.
+
+**Architecture:**
+- **Normalization**: LayerNorm (chosen over RMSNorm for speed)
+- **Attention**: SimpleBitAttention
+- **MLP**: BitMLP
+- **Structure**: Pre-norm architecture for stability
+
+**Forward Pass:**
+```
+x = x + attention(norm1(x))    # Self-attention with residual
+x = x + mlp(norm2(x))          # MLP with residual
+```
+
+### 5. EfficientBitNet (`EfficientBitNet`)
+Complete language model architecture.
+
+**Parameters:**
+- `vocab_size`: Vocabulary size
+- `dim`: Model dimension (default: 128)
+- `depth`: Number of transformer blocks (default: 3)
+- `heads`: Number of attention heads (default: 4)
+- `max_len`: Maximum sequence length (default: 128)
+
+**Components:**
+1. **Embeddings**:
+   - `token_emb`: Token embedding layer (vocab_size → dim)
+   - `pos_emb`: Positional embedding layer (max_len → dim)
+
+2. **Transformer Stack**:
+   - `blocks`: ModuleList of `depth` BitBlock layers
+
+3. **Output Head**:
+   - `norm`: Final layer normalization
+   - `head`: BitLinear layer for vocabulary prediction (dim → vocab_size)
+
+**Forward Pass:**
+1. **Embedding**: Add token and positional embeddings
+2. **Transformer Processing**: Sequential application of BitBlocks
+3. **Output**: Layer norm + linear projection to vocabulary
+4. **Loss**: Cross-entropy loss for next-token prediction (if targets provided)
+
+## Supporting Components
+
+### FastTokenizer
+Character-level tokenizer for efficient text processing:
+- **Vocabulary**: All unique characters in training text
+- **Encoding**: Character → index mapping
+- **Decoding**: Index → character mapping
+
+### FastDataset
+Memory-efficient dataset for sequence modeling:
+- **Sequence Length**: Fixed-length sequences (default: 64)
+- **Target**: Next-token prediction (shifted by 1)
+- **Format**: (input_sequence, target_sequence)
+
+## Training Configuration
+
+**Model Configuration (Main):**
+- **Dimension**: 256
+- **Depth**: 6 layers
+- **Heads**: 8
+- **Sequence Length**: 64
+- **Batch Size**: 64
+
+**Training Setup:**
+- **Optimizer**: AdamW (lr=1e-3, weight_decay=0.01)
+- **Gradient Clipping**: 1.0
+- **Loss Function**: Cross-entropy
+- **Epochs**: 5 (for fast training)
+
+## Key Innovations
+
+### 1. Weight Quantization
+- **Ternary Weights**: {-1, 0, +1} reduce memory by ~16x
+- **Dynamic Scaling**: Learnable scale factors maintain model expressiveness
+- **Threshold-based**: 0.5 threshold eliminates small weights
+
+### 2. Activation Quantization
+- **Clamping**: Input activations bounded to [-1, 1]
+- **Simplicity**: Avoids complex activation quantization schemes
+
+### 3. Efficiency Optimizations
+- **On-the-fly Quantization**: Weights quantized during forward pass
+- **Simplified Attention**: Single QKV projection
+- **Pre-norm Architecture**: More stable training
+- **Reduced Dimensions**: Smaller model for faster training
+
+## Memory and Computational Benefits
+
+**Memory Reduction:**
+- Weights: ~16x reduction (32-bit → ~2-bit effective)
+- Activations: Reduced precision bounds
+- Overall: Significant memory footprint reduction
+
+**Computational Efficiency:**
+- **Ternary Operations**: Simpler arithmetic operations
+- **Reduced Precision**: Faster matrix multiplications
+- **Smaller Models**: Faster inference and training
+
+## Applications and Use Cases
+
+**Suitable for:**
+- Resource-constrained environments
+- Mobile/edge deployment
+- Fast prototyping and experimentation
+- Educational purposes (understanding quantization)
+
+**Character-level Generation:**
+- Text completion
+- Style transfer
+- Creative writing assistance
+- Code generation (with appropriate training data)
+
+This BitNet implementation demonstrates how extreme quantization can maintain reasonable performance while dramatically reducing computational and memory requirements, making it practical for deployment in resource-constrained environments.
